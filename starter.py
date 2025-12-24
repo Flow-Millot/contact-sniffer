@@ -13,6 +13,12 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
 
+try:
+    import win32com.client as win32
+    WIN32_AVAILABLE = True
+except ImportError:
+    WIN32_AVAILABLE = False
+
 class ContactExtractor:
     def __init__(self, root_dir):
         self.root_dir = root_dir
@@ -22,6 +28,15 @@ class ContactExtractor:
         self.phone_pattern = re.compile(r'(?:(?:\+|00)33|0)\s*[1-9](?:[\s.-]*\d{2}){4}')
         # Regex for Emails
         self.email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+        
+        self.word_app = None
+        if WIN32_AVAILABLE:
+            try:
+                self.word_app = win32.Dispatch("Word.Application")
+                self.word_app.Visible = False # Word is running in background
+                self.word_app.DisplayAlerts = False 
+            except Exception as e:
+                logger.warning(f"Impossible to launch Word : {e}")
 
     def run(self):
         """Main execution method."""
@@ -30,8 +45,11 @@ class ContactExtractor:
         # Walk through directory recursively
         for root, dirs, files in os.walk(self.root_dir):
             for file in files:
-                file_path = os.path.join(root, file)
-                self.process_file(file_path)
+                if not file.startswith('~$'): 
+                    file_path = os.path.join(root, file)
+                    self.process_file(file_path)
+                    
+        self.close_word()
 
         if not self.data_list:
             logger.warning("No data extracted. Check your files or table structures.")
@@ -52,8 +70,7 @@ class ContactExtractor:
             elif ext == '.odt':
                 raw_text = self.extract_from_odt(file_path)
             elif ext == '.doc':
-                logger.warning(f"Skipping .doc file (requires conversion to .docx): {file_path}")
-                return
+                raw_text = self.extract_from_doc(file_path)
             else:
                 return # Ignore other files
             
@@ -67,6 +84,37 @@ class ContactExtractor:
 
         except Exception as e:
             logger.error(f"Error processing {file_path}: {e}")
+            
+    def extract_from_doc(self, file_path):
+        """Extract via Word Automation (Windows needed + Word installed)."""
+        if not self.word_app:
+            logger.warning("Word not available to oepn .doc")
+            return None
+        
+        doc = None
+        try:
+            # Open the document
+            doc = self.word_app.Documents.Open(os.path.abspath(file_path))
+            
+            # Word VBA : Tables(1) is the first table
+            if doc.Tables.Count > 0:
+                # Cell(Row, Column)
+                # We want line 1, column 2.
+                try:
+                    cell_content = doc.Tables(1).Cell(1, 2).Range.Text
+                    # Cleaning : Word adds digits at the end of rows (\r\x07)
+                    clean_text = cell_content.replace('\r', '\n').replace('\x07', '').strip()
+                    return clean_text
+                except Exception as e:
+                    logger.debug(f"Table found but no cells in {file_path}")
+            
+            return None
+        except Exception as e:
+            logger.error(f"Word error in {file_path}: {e}")
+            return None
+        finally:
+            if doc:
+                doc.Close(False) # False = do not save changes
 
     def extract_from_pdf(self, file_path):
         """Extracts text from the 2nd cell of the 1st table in a PDF."""
@@ -209,6 +257,13 @@ class ContactExtractor:
         except Exception as e:
             logger.error(f"Error saving files: {e}")
 
+    def close_word(self):
+        if self.word_app:
+            try:
+                self.word_app.Quit()
+            except:
+                pass
+            
 if __name__ == "__main__":
     # Uses the directory where the script is located
     current_directory = os.getcwd()
