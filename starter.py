@@ -7,6 +7,9 @@ from odf import text, teletype
 from odf.opendocument import load
 from pathlib import Path
 import logging
+import subprocess
+import tempfile
+import shutil
 
 # --- Configuration ---
 # Configure logging to see what happens in the console
@@ -86,35 +89,54 @@ class ContactExtractor:
             logger.error(f"Error processing {file_path}: {e}")
             
     def extract_from_doc(self, file_path):
-        """Extract via Word Automation (Windows needed + Word installed)."""
-        if not self.word_app:
-            logger.warning("Word not available to oepn .doc")
-            return None
+        """
+        Alternative: Converts .doc to .docx using LibreOffice, 
+        then reads it with python-docx.
+        """
+        # Check if LibreOffice is available in PATH (usually 'soffice')
+        # On Windows, you might need to add the full path, e.g.:
+        # soffice_path = r"C:\Program Files\LibreOffice\program\soffice.exe"
+        soffice_path = shutil.which("soffice") 
         
-        doc = None
+        # Fallback for common Windows install location if not in PATH
+        if not soffice_path:
+            potential_path = r"C:\Program Files\LibreOffice\program\soffice.exe"
+            if os.path.exists(potential_path):
+                soffice_path = potential_path
+
+        if not soffice_path:
+            logger.warning("LibreOffice (soffice) not found. Cannot process .doc file.")
+            return None
+
         try:
-            # Open the document
-            doc = self.word_app.Documents.Open(os.path.abspath(file_path))
-            
-            # Word VBA : Tables(1) is the first table
-            if doc.Tables.Count > 0:
-                # Cell(Row, Column)
-                # We want line 1, column 2.
-                try:
-                    cell_content = doc.Tables(1).Cell(1, 2).Range.Text
-                    # Cleaning : Word adds digits at the end of rows (\r\x07)
-                    clean_text = cell_content.replace('\r', '\n').replace('\x07', '').strip()
-                    return clean_text
-                except Exception as e:
-                    logger.debug(f"Table found but no cells in {file_path}")
-            
-            return None
+            # Create a temporary directory to store the converted .docx
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Command to convert .doc to .docx
+                cmd = [
+                    soffice_path,
+                    '--headless',
+                    '--convert-to', 'docx',
+                    '--outdir', temp_dir,
+                    file_path
+                ]
+                
+                # Run conversion (suppress output)
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+                # The file will have the same name but .docx extension
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                converted_file = os.path.join(temp_dir, base_name + ".docx")
+                
+                if os.path.exists(converted_file):
+                    # Reuse your existing .docx logic!
+                    return self.extract_from_docx(converted_file)
+                else:
+                    logger.warning(f"Conversion failed for {file_path}")
+                    return None
+                    
         except Exception as e:
-            logger.error(f"Word error in {file_path}: {e}")
+            logger.error(f"Error converting .doc file: {e}")
             return None
-        finally:
-            if doc:
-                doc.Close(False) # False = do not save changes
 
     def extract_from_pdf(self, file_path):
         """Extracts text from the 2nd cell of the 1st table in a PDF."""
