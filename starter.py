@@ -10,6 +10,7 @@ import logging
 import subprocess
 import tempfile
 import shutil
+import time
 
 # --- Configuration ---
 # Configure logging to see what happens in the console
@@ -45,6 +46,7 @@ class ContactExtractor:
     def run(self):
         """Main execution method."""
         logger.info(f"Starting scan in: {self.root_dir}")
+        self.start_time = time.time()
         
         # Walk through directory recursively
         for root, dirs, files in os.walk(self.root_dir):
@@ -305,13 +307,20 @@ class ContactExtractor:
             df.to_excel("contacts_export.xlsx", index=False)
             df.to_csv("contacts_export.csv", index=False)
             logger.info("Successfully exported to 'contacts_export.xlsx' and 'contacts_export.csv'")
+            
             print("\n" + "="*30)
+            
             print("Extraction finished !")
             print(f"Total contacts found (unique) : {len(df)}")
             if removed_count > 0:
                 print(f"Duplicates removed : {removed_count}")
+                
             if self.failed_count > 0:
                 print(f"Files failed/empty : {self.failed_count}")
+                
+            elapsed_time = time.time() - self.start_time
+            print(f"Execution time : {elapsed_time:.2f} seconds")
+            
             print("="*30)
         except Exception as e:
             logger.error(f"Error saving files: {e}")
