@@ -26,6 +26,7 @@ class ContactExtractor:
     def __init__(self, root_dir):
         self.root_dir = root_dir
         self.data_list = []
+        self.failed_count = 0
         
         # Regex for French phone numbers (flexible: 06, +33, spaces, dots)
         self.phone_pattern = re.compile(r'(?:(?:\+|00)33|0)\s*[1-9](?:[\s.-]*\d{2}){4}')
@@ -84,9 +85,11 @@ class ContactExtractor:
                 self.data_list.append(parsed_info)
             else:
                 logger.debug(f"No valid table data found in {os.path.basename(file_path)}")
+                self.failed_count += 1
 
         except Exception as e:
             logger.error(f"Error processing {file_path}: {e}")
+            self.failed_count += 1
             
     def extract_from_doc(self, file_path):
         """
@@ -260,18 +263,41 @@ class ContactExtractor:
         return info
 
     def save_data(self):
-        """Saves the list of dictionaries to CSV and Excel."""
+        """Saves the list of dictionaries to CSV and Excel with deduplication."""
         df = pd.DataFrame(self.data_list)
         
+        # --- ÉTAPE DE DÉDUPLICATION ---
+        # 1. On liste toutes les colonnes à vérifier
+        # On prend tout le monde SAUF 'source_file' et 'raw_extraction'
+        cols_to_check = [c for c in df.columns if c not in ['source_file', 'raw_extraction']]
+        
+        # 2. On compte combien on en avait avant pour le log
+        initial_count = len(df)
+        
+        # 3. On supprime les doublons
+        # keep='first' : on garde la première occurrence trouvée
+        # inplace=True : on modifie le dataframe directement
+        df.drop_duplicates(subset=cols_to_check, keep='first', inplace=True)
+        
+        # 4. Petit log informatif
+        removed_count = initial_count - len(df)
+        if removed_count > 0:
+            logger.info(f"Doublons supprimés : {removed_count} entrée(s).")
+        # ------------------------------
+
         # Order columns nicely (Name, Phones, Emails, Address, Source)
         cols = list(df.columns)
         priority_cols = ['name', 'address']
         # Sort phones and emails dynamically
         phones = sorted([c for c in cols if c.startswith('phone')])
         emails = sorted([c for c in cols if c.startswith('email')])
+        # On s'assure de garder les autres colonnes (dont source_file)
         others = [c for c in cols if c not in priority_cols + phones + emails]
         
         final_order = priority_cols + phones + emails + others
+        # On réordonne, mais attention si une colonne n'existe plus (cas rare), on intersecte
+        final_order = [c for c in final_order if c in df.columns]
+        
         df = df[final_order]
 
         # Export
@@ -281,7 +307,11 @@ class ContactExtractor:
             logger.info("Successfully exported to 'contacts_export.xlsx' and 'contacts_export.csv'")
             print("\n" + "="*30)
             print("Extraction finished !")
-            print(f"Total contacts found : {len(df)}")
+            print(f"Total contacts found (unique) : {len(df)}")
+            if removed_count > 0:
+                print(f"Duplicates removed : {removed_count}")
+            if self.failed_count > 0:
+                print(f"Files failed/empty : {self.failed_count}")
             print("="*30)
         except Exception as e:
             logger.error(f"Error saving files: {e}")
