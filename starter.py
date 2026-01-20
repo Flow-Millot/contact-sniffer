@@ -221,21 +221,28 @@ class ContactExtractor:
         for i, phone in enumerate(phones, 1):
             info[f'phone_{i}'] = phone
 
-        # 4. Heuristic for Name and Address
-        # We assume lines that are NOT phones or emails constitute the entity/address
+        # 4. Heuristic for Name and Address (CORRIGÉ)
         remaining_lines = []
+        
         for line in lines:
-            # Check if line is purely a phone number or email extracted above
-            # This is a simple check; text extraction can be messy so we keep the line 
-            # if it contains partial address info even if it has a phone.
-            is_purely_contact = False
-            for p in phones:
-                if p in line and len(line) < len(p) + 5: is_purely_contact = True
-            for e in emails:
-                if e in line and len(line) < len(e) + 5: is_purely_contact = True
+            clean_line = line
             
-            if not is_purely_contact:
-                remaining_lines.append(line)
+            # Au lieu de vérifier si la ligne EST un téléphone, 
+            # on SUPPRIME le téléphone de la ligne
+            for p in phones:
+                clean_line = clean_line.replace(p, "")
+            
+            # Idem pour les emails
+            for e in emails:
+                clean_line = clean_line.replace(e, "")
+            
+            # On nettoie les espaces multiples qui pourraient rester (ex: "Paris  ")
+            clean_line = clean_line.strip()
+            
+            # S'il reste du texte après avoir enlevé emails et téléphones, c'est une partie de l'adresse/nom
+            # On ignore les lignes qui deviennent vides ou qui ne contiennent que des caractères parasites
+            if len(clean_line) > 1: 
+                remaining_lines.append(clean_line)
 
         # Assume First remaining line is the Name/Company
         if remaining_lines:
