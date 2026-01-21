@@ -66,25 +66,33 @@ class ContactExtractor:
     def process_file(self, file_path):
         """Dispatcher that calls the right extractor based on extension."""
         ext = os.path.splitext(file_path)[1].lower()
-        raw_text = None
+        raw_texts_list = [] # On s'attend maintenant à une liste
 
         try:
             if ext == '.pdf':
-                raw_text = self.extract_from_pdf(file_path)
+                raw_texts_list = self.extract_from_pdf(file_path)
             elif ext == '.docx':
-                raw_text = self.extract_from_docx(file_path)
+                raw_texts_list = self.extract_from_docx(file_path)
             elif ext == '.odt':
-                raw_text = self.extract_from_odt(file_path)
+                raw_texts_list = self.extract_from_odt(file_path)
             elif ext == '.doc':
-                raw_text = self.extract_from_doc(file_path)
+                raw_texts_list = self.extract_from_doc(file_path)
             else:
                 return # Ignore other files
             
-            if raw_text:
-                logger.info(f"Data found in: {os.path.basename(file_path)}")
-                parsed_info = self.parse_contact_info(raw_text)
-                parsed_info['source_file'] = file_path # Add source path for reference
-                self.data_list.append(parsed_info)
+            # Si on a trouvé des données (liste non vide)
+            if raw_texts_list:
+                logger.info(f"Data found in: {os.path.basename(file_path)} ({len(raw_texts_list)} contacts potential)")
+                
+                # On boucle sur CHAQUE texte trouvé (chaque cellule est un contact potentiel)
+                for text_blob in raw_texts_list:
+                    # On ignore les cellules trop vides ou parasites (moins de 5 chars par ex)
+                    if len(text_blob) < 5: 
+                        continue
+                        
+                    parsed_info = self.parse_contact_info(text_blob)
+                    parsed_info['source_file'] = file_path 
+                    self.data_list.append(parsed_info)
             else:
                 logger.debug(f"No valid table data found in {os.path.basename(file_path)}")
                 self.failed_count += 1
@@ -144,67 +152,61 @@ class ContactExtractor:
             return None
 
     def extract_from_pdf(self, file_path):
-        """Extracts text from the 2nd cell of the 1st table in a PDF."""
+        """Extracts text from all cells in the first 6 tables of a PDF."""
+        extracted_texts = []
         with pdfplumber.open(file_path) as pdf:
             if not pdf.pages:
-                return None
+                return []
             first_page = pdf.pages[0]
-            tables = first_page.extract_tables()
+            # On prend les 6 premiers tableaux
+            tables = first_page.extract_tables()[:6] 
             
-            if tables:
-                first_table = tables[0]
-                # Flatten the table to find the 2nd cell regardless of row/col structure
-                # We assume reading order: Row 1 Col 1, Row 1 Col 2, etc.
-                flattened_cells = [cell for row in first_table for cell in row if cell]
-                
-                if len(flattened_cells) >= 2:
-                    return flattened_cells[1] # Return the second cell
-        return None
+            for table in tables:
+                # On aplatit le tableau (liste de listes -> liste simple)
+                # et on ne garde que les cellules qui ont du texte
+                for row in table:
+                    for cell in row:
+                        if cell and cell.strip():
+                            extracted_texts.append(cell.strip())
+                            
+        return extracted_texts
 
     def extract_from_docx(self, file_path):
-        """Extracts text from the 2nd cell of the 1st table in a DOCX."""
+        """Extracts text from all cells in the first 6 tables of a DOCX."""
+        extracted_texts = []
         doc = docx.Document(file_path)
-        if doc.tables:
-            table = doc.tables[0]
-            # Strategy: Get all cells in the first row, then second row if needed
-            # We want the second "physical" cell. 
-            # Usually Row 0, Col 1.
-            
-            all_cells = []
+        
+        # On prend jusqu'à 6 tableaux
+        target_tables = doc.tables[:6]
+        
+        for table in target_tables:
             for row in table.rows:
                 for cell in row.cells:
-                    all_cells.append(cell.text.strip())
-                    if len(all_cells) >= 2:
-                        break
-                if len(all_cells) >= 2:
-                    break
-            
-            if len(all_cells) >= 2:
-                return all_cells[1]
-        return None
+                    text_content = cell.text.strip()
+                    if text_content:
+                        extracted_texts.append(text_content)
+                        
+        return extracted_texts
 
     def extract_from_odt(self, file_path):
-        """Extracts text from the 2nd cell of the 1st table in an ODT."""
+        """Extracts text from all cells in the first 6 tables of an ODT."""
+        extracted_texts = []
         doc = load(file_path)
-        tables = doc.getElementsByType(text.Table)
+        all_tables = doc.getElementsByType(text.Table)
         
-        if tables:
-            table = tables[0]
+        # On prend les 6 premiers
+        target_tables = all_tables[:6]
+        
+        for table in target_tables:
             rows = table.getElementsByType(text.TableRow)
-            
-            all_cells_text = []
             for row in rows:
                 cells = row.getElementsByType(text.TableCell)
                 for cell in cells:
-                    all_cells_text.append(teletype.extractText(cell).strip())
-                    if len(all_cells_text) >= 2:
-                        break
-                if len(all_cells_text) >= 2:
-                    break
-            
-            if len(all_cells_text) >= 2:
-                return all_cells_text[1]
-        return None
+                    cell_text = teletype.extractText(cell).strip()
+                    if cell_text:
+                        extracted_texts.append(cell_text)
+                        
+        return extracted_texts
 
     def parse_contact_info(self, raw_text):
         """
